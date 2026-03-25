@@ -80,6 +80,7 @@ jobs:
       # ── Build EIF and extract measurements ────────────────────────
       - name: Build EIF image
         run: |
+          sudo mkdir -p /var/log/nitro_enclaves
           mkdir -p output
           nitro-cli build-enclave \
             --docker-uri nitro-enclave-app \
