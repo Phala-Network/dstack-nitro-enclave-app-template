@@ -1,0 +1,4 @@
+output/
+app/dstack-util
+*.eif
+*.pem

@@ -1,0 +1,218 @@
+name: Build Nitro Enclave & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      kms_url:
+        description: 'KMS URL baked into the image (affects measurements)'
+        required: false
+        default: 'https://kms.example.com:12001'
+      app_id:
+        description: 'App ID baked into the image (affects measurements)'
+        required: false
+        default: ''
+      dstack_version:
+        description: 'dstack version tag to build dstack-util from'
+        required: false
+        default: 'v0.5.8'
+
+permissions:
+  contents: write        # create releases
+  id-token: write        # sigstore OIDC token
+  attestations: write    # GitHub attestations
+
+env:
+  DSTACK_VERSION: ${{ inputs.dstack_version || 'v0.5.8' }}
+  KMS_URL: ${{ inputs.kms_url || 'https://kms.example.com:12001' }}
+  APP_ID: ${{ inputs.app_id || '' }}
+
+jobs:
+  build:
+    # ── Runner requirement ──────────────────────────────────────────
+    # nitro-cli build-enclave needs Docker and the Nitro CLI.
+    # Use a self-hosted runner on an EC2 Nitro instance (e.g. c5.xlarge
+    # with Amazon Linux 2023) that has nitro-cli and Docker installed.
+    #
+    # Label your runner with "nitro" so this job picks it up.
+    # See README.md for runner setup instructions.
+    runs-on: [self-hosted, linux, nitro]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install Rust + musl target (for building dstack-util) ─────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl-tools
+        run: |
+          if command -v apt-get &>/dev/null; then
+            sudo apt-get update -y && sudo apt-get install -y musl-tools
+          elif command -v dnf &>/dev/null; then
+            # AL2023 / Fedora: musl-gcc is in the musl-devel package
+            sudo dnf install -y musl-devel musl-gcc
+          fi
+
+      # ── Build dstack-util from source ─────────────────────────────
+      - name: Build dstack-util (musl static binary)
+        run: |
+          git clone --depth 1 --branch "$DSTACK_VERSION" \
+            https://github.com/Dstack-TEE/dstack.git /tmp/dstack-src
+          cd /tmp/dstack-src
+          cargo build --release -p dstack-util --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/dstack-util "$GITHUB_WORKSPACE/app/dstack-util"
+          chmod +x "$GITHUB_WORKSPACE/app/dstack-util"
+
+      # ── Substitute KMS_URL / APP_ID into entrypoint ───────────────
+      - name: Render entrypoint template
+        run: |
+          KMS_ESC=$(printf '%s' "$KMS_URL" | sed 's/[\\/&]/\\&/g')
+          APP_ESC=$(printf '%s' "$APP_ID" | sed 's/[\\/&]/\\&/g')
+          sed -i \
+            -e "s/__KMS_URL__/${KMS_ESC}/g" \
+            -e "s/__APP_ID__/${APP_ESC}/g" \
+            app/entrypoint.sh
+
+      # ── Build Docker image ────────────────────────────────────────
+      - name: Build Docker image
+        run: docker build -t nitro-enclave-app -f app/Dockerfile app/
+
+      # ── Build EIF and extract measurements ────────────────────────
+      - name: Build EIF image
+        run: |
+          mkdir -p output
+          nitro-cli build-enclave \
+            --docker-uri nitro-enclave-app \
+            --output-file output/enclave.eif \
+            > output/nitro-build.json
+
+      - name: Extract measurements
+        id: measurements
+        run: |
+          PCR0=$(jq -r '.Measurements.PCR0' output/nitro-build.json)
+          PCR1=$(jq -r '.Measurements.PCR1' output/nitro-build.json)
+          PCR2=$(jq -r '.Measurements.PCR2' output/nitro-build.json)
+
+          CODE_HASH=$(python3 -c "
+          import hashlib
+          pcrs = bytes.fromhex('${PCR0}') + bytes.fromhex('${PCR1}') + bytes.fromhex('${PCR2}')
+          print('0x' + hashlib.sha256(pcrs).hexdigest())
+          ")
+
+          # Persist for later steps
+          echo "pcr0=${PCR0}" >> "$GITHUB_OUTPUT"
+          echo "pcr1=${PCR1}" >> "$GITHUB_OUTPUT"
+          echo "pcr2=${PCR2}" >> "$GITHUB_OUTPUT"
+          echo "code_hash=${CODE_HASH}" >> "$GITHUB_OUTPUT"
+
+          # Write measurements.json artifact
+          jq -n \
+            --arg pcr0 "${PCR0}" \
+            --arg pcr1 "${PCR1}" \
+            --arg pcr2 "${PCR2}" \
+            --arg code_hash "${CODE_HASH}" \
+            --arg kms_url "${KMS_URL}" \
+            --arg app_id "${APP_ID}" \
+            --arg dstack_version "${DSTACK_VERSION}" \
+            --arg git_sha "${GITHUB_SHA}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              PCR0: $pcr0, PCR1: $pcr1, PCR2: $pcr2,
+              code_hash: $code_hash,
+              kms_url: $kms_url, app_id: $app_id,
+              dstack_version: $dstack_version,
+              git_sha: $git_sha, built_at: $built_at
+            }' > output/measurements.json
+
+          echo "::notice::CODE_HASH (OS_IMAGE_HASH) = ${CODE_HASH}"
+
+      # ── Sigstore: attest the code hash ────────────────────────────
+      # This creates a Rekor transparency log entry binding the
+      # code_hash to this GitHub Actions workflow identity (OIDC).
+      # Anyone can verify: cosign verify-attestation ...
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Attest measurements with Sigstore
+        run: |
+          # Attest the measurements.json file — its content includes
+          # the code_hash that gets registered on-chain.
+          cosign attest-blob \
+            --yes \
+            --predicate output/measurements.json \
+            --type https://dstack.dev/nitro-enclave/measurements/v1 \
+            --bundle output/measurements.sigstore.json \
+            output/enclave.eif
+
+      # ── GitHub Artifact Attestation ───────────────────────────────
+      - name: Attest EIF artifact
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: output/enclave.eif
+
+      - name: Attest measurements artifact
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: output/measurements.json
+
+      # ── Upload artifacts (for non-tag runs) ───────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nitro-enclave-build
+          path: |
+            output/enclave.eif
+            output/measurements.json
+            output/measurements.sigstore.json
+
+      # ── Create GitHub Release (tag pushes only) ───────────────────
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: |
+            ## Nitro Enclave Image
+
+            | Field | Value |
+            |-------|-------|
+            | **CODE_HASH** | `${{ steps.measurements.outputs.code_hash }}` |
+            | PCR0 | `${{ steps.measurements.outputs.pcr0 }}` |
+            | PCR1 | `${{ steps.measurements.outputs.pcr1 }}` |
+            | PCR2 | `${{ steps.measurements.outputs.pcr2 }}` |
+            | KMS URL | `${{ env.KMS_URL }}` |
+            | App ID | `${{ env.APP_ID }}` |
+            | dstack | `${{ env.DSTACK_VERSION }}` |
+            | Git SHA | `${{ github.sha }}` |
+
+            ### On-chain registration
+
+            Use `CODE_HASH` as the `os_image_hash` when calling
+            `kms:add-image` to whitelist this enclave image:
+
+            ```bash
+            npx hardhat kms:add-image ${{ steps.measurements.outputs.code_hash }} \
+              --network <your-network>
+            ```
+
+            ### Sigstore verification
+
+            The measurements are attested via Sigstore. Verify with:
+
+            ```bash
+            cosign verify-blob-attestation \
+              --bundle measurements.sigstore.json \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity-regexp "github.com/${{ github.repository }}" \
+              --type https://dstack.dev/nitro-enclave/measurements/v1 \
+              enclave.eif
+            ```
+          files: |
+            output/enclave.eif
+            output/measurements.json
+            output/measurements.sigstore.json
