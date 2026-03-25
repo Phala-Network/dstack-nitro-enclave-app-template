@@ -31,32 +31,26 @@ env:
 
 jobs:
   build:
-    # ── Runner requirement ──────────────────────────────────────────
-    # nitro-cli build-enclave needs Docker and the Nitro CLI.
-    # Use a self-hosted runner on an EC2 Nitro instance (e.g. c5.xlarge
-    # with Amazon Linux 2023) that has nitro-cli and Docker installed.
-    #
-    # Label your runner with "nitro" so this job picks it up.
-    # See README.md for runner setup instructions.
-    runs-on: [self-hosted, linux, nitro]
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      # ── Install Rust + musl target (for building dstack-util) ─────
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-
-      - name: Install musl-tools
+      # ── Install nitro-cli (build-enclave works without Nitro HW) ──
+      - name: Install nitro-cli from source
         run: |
-          if command -v apt-get &>/dev/null; then
-            sudo apt-get update -y && sudo apt-get install -y musl-tools
-          elif command -v dnf &>/dev/null; then
-            # AL2023 / Fedora: musl-gcc is in the musl-devel package
-            sudo dnf install -y musl-devel musl-gcc
-          fi
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools
+          git clone --depth 1 --branch v1.4.4 \
+            https://github.com/aws/aws-nitro-enclaves-cli.git /tmp/nitro-cli-src
+          cd /tmp/nitro-cli-src
+          cargo build --release -p nitro-cli
+          sudo cp target/release/nitro-cli /usr/local/bin/
+          rm -rf /tmp/nitro-cli-src
+
+      # ── Install Rust musl target (for building dstack-util) ───────
+      - name: Install Rust musl target
+        run: rustup target add x86_64-unknown-linux-musl
 
       # ── Build dstack-util from source ─────────────────────────────
       - name: Build dstack-util (musl static binary)
@@ -67,6 +61,7 @@ jobs:
           cargo build --release -p dstack-util --target x86_64-unknown-linux-musl
           cp target/x86_64-unknown-linux-musl/release/dstack-util "$GITHUB_WORKSPACE/app/dstack-util"
           chmod +x "$GITHUB_WORKSPACE/app/dstack-util"
+          rm -rf /tmp/dstack-src
 
       # ── Substitute KMS_URL / APP_ID into entrypoint ───────────────
       - name: Render entrypoint template

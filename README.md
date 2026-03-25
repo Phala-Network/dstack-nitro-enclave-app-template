@@ -38,21 +38,9 @@ Edit `app/entrypoint.sh` to implement your enclave logic. The template ships wit
 
 The `__KMS_URL__` and `__APP_ID__` placeholders are replaced at build time. **Changing these values changes the PCR measurements**, so the same values must be used for both measurement preview and production builds.
 
-### 3. Set up a self-hosted runner
+### 3. Create a release
 
-The EIF build requires `nitro-cli`, which needs an EC2 instance with Nitro Enclave support. Set up a [self-hosted GitHub Actions runner](https://docs.github.com/en/actions/hosting-your-own-runners) on an EC2 instance:
-
-```bash
-# On an Amazon Linux 2023 c5.xlarge (or similar Nitro instance):
-sudo dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel docker
-sudo systemctl enable --now docker nitro-enclaves-allocator
-sudo usermod -aG docker,ne $USER
-
-# Install the GitHub Actions runner with labels: self-hosted, linux, nitro
-# See: https://github.com/<owner>/<repo>/settings/actions/runners/new
-```
-
-### 4. Create a release
+The CI runs on GitHub's standard `ubuntu-latest` runners — no special hardware needed. `nitro-cli build-enclave` only converts a Docker image to EIF format and computes measurements; Nitro hardware is only required to *run* the enclave.
 
 Push a version tag to trigger the build:
 
@@ -63,7 +51,7 @@ git push origin v0.1.0
 
 Or use **Actions → Run workflow** for a manual build with custom KMS_URL / APP_ID.
 
-### 5. Register the code hash on-chain
+### 4. Register the code hash on-chain
 
 After the release is created, copy the `CODE_HASH` from the release page and register it:
 
@@ -74,7 +62,7 @@ npx hardhat kms:add-image <CODE_HASH> --network <your-network>
 
 ## Local build
 
-You can build locally on a Nitro-capable instance:
+You can build locally (needs Docker and `nitro-cli` installed):
 
 ```bash
 # Option A: with a pre-built dstack-util binary
