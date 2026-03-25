@@ -46,6 +46,9 @@ jobs:
           cd /tmp/nitro-cli-src
           cargo build --release -p nitro-cli
           sudo cp target/release/nitro-cli /usr/local/bin/
+          # Install EIF build blobs (kernel, init ramdisk, NSM module)
+          sudo mkdir -p /usr/share/nitro_enclaves/blobs
+          sudo cp blobs/x86_64/* /usr/share/nitro_enclaves/blobs/
           rm -rf /tmp/nitro-cli-src
 
       # ── Install Rust musl target (for building dstack-util) ───────
