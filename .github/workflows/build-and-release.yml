@@ -81,6 +81,8 @@ jobs:
       - name: Build EIF image
         run: |
           sudo mkdir -p /var/log/nitro_enclaves
+          sudo touch /var/log/nitro_enclaves/nitro_enclaves.log
+          sudo chmod 666 /var/log/nitro_enclaves/nitro_enclaves.log
           mkdir -p output
           nitro-cli build-enclave \
             --docker-uri nitro-enclave-app \
