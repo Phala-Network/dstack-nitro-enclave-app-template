@@ -139,10 +139,26 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Sign PCR payload (code_hash = sha256 of this blob)
+        run: |
+          # code_hash = sha256(PCR0 || PCR1 || PCR2)
+          # By signing the raw PCR concatenation, Rekor indexes the entry
+          # by its sha256 digest — which IS the code_hash.  This makes it
+          # searchable on https://search.sigstore.dev/?hash=<code_hash>.
+          python3 -c "
+          import sys
+          pcr0 = bytes.fromhex('${{ steps.measurements.outputs.pcr0 }}')
+          pcr1 = bytes.fromhex('${{ steps.measurements.outputs.pcr1 }}')
+          pcr2 = bytes.fromhex('${{ steps.measurements.outputs.pcr2 }}')
+          sys.stdout.buffer.write(pcr0 + pcr1 + pcr2)
+          " > output/pcr_payload.bin
+
+          cosign sign-blob --yes \
+            --bundle output/code_hash.sigstore.json \
+            output/pcr_payload.bin
+
       - name: Attest measurements with Sigstore
         run: |
-          # Attest the measurements.json file — its content includes
-          # the code_hash that gets registered on-chain.
           cosign attest-blob \
             --yes \
             --predicate output/measurements.json \
@@ -170,6 +186,7 @@ jobs:
             output/enclave.eif
             output/measurements.json
             output/measurements.sigstore.json
+            output/code_hash.sigstore.json
 
       # ── Create GitHub Release (tag pushes only) ───────────────────
       - name: Create release
@@ -203,7 +220,9 @@ jobs:
 
             ### Sigstore verification
 
-            The measurements are attested via Sigstore. Verify with:
+            **Search by CODE_HASH on Rekor**: [search.sigstore.dev](https://search.sigstore.dev/?hash=${{ steps.measurements.outputs.code_hash }})
+
+            Verify the measurements attestation:
 
             ```bash
             cosign verify-blob-attestation \
@@ -217,3 +236,4 @@ jobs:
             output/enclave.eif
             output/measurements.json
             output/measurements.sigstore.json
+            output/code_hash.sigstore.json
