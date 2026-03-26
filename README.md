@@ -107,7 +107,7 @@ To verify locally:
 
 ```bash
 # Download release assets
-gh release download v0.1.0 -p 'measurements.json' -p 'os_image_hash.sigstore.json'
+gh release download v0.1.0 -p 'measurements.json' -p 'measurements.sigstore.json'
 
 # Reconstruct the PCR payload (the blob whose sha256 = OS_IMAGE_HASH)
 python3 -c "
@@ -120,7 +120,7 @@ sys.stdout.buffer.write(
 
 # Verify
 cosign verify-blob-attestation \
-  --bundle os_image_hash.sigstore.json \
+  --bundle measurements.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp "github.com/<owner>/<repo>" \
   --type https://dstack.dev/nitro-enclave/measurements/v1 \

@@ -157,7 +157,7 @@ jobs:
             --yes \
             --predicate output/measurements.json \
             --type https://dstack.dev/nitro-enclave/measurements/v1 \
-            --bundle output/os_image_hash.sigstore.json \
+            --bundle output/measurements.sigstore.json \
             output/pcr_payload.bin
 
       # ── GitHub Artifact Attestation ───────────────────────────────
@@ -179,7 +179,7 @@ jobs:
           path: |
             output/enclave.eif
             output/measurements.json
-            output/os_image_hash.sigstore.json
+            output/measurements.sigstore.json
 
       # ── Create GitHub Release (tag pushes only) ───────────────────
       - name: Create release
@@ -226,7 +226,7 @@ jobs:
             " > pcr_payload.bin
 
             cosign verify-blob-attestation \
-              --bundle os_image_hash.sigstore.json \
+              --bundle measurements.sigstore.json \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               --certificate-identity-regexp "github.com/${{ github.repository }}" \
               --type https://dstack.dev/nitro-enclave/measurements/v1 \
@@ -235,4 +235,4 @@ jobs:
           files: |
             output/enclave.eif
             output/measurements.json
-            output/os_image_hash.sigstore.json
+            output/measurements.sigstore.json
