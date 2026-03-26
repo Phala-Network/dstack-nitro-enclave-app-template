@@ -3,8 +3,8 @@
 #
 # Inputs (env):
 #   DSTACK_UTIL  – path to a pre-built dstack-util musl binary
-#                  (default: downloaded from DSTACK_VERSION release)
-#   DSTACK_VERSION – dstack release tag to fetch dstack-util from
+#                  (default: downloaded from DSTACK_COMMIT release)
+#   DSTACK_COMMIT – dstack release tag to fetch dstack-util from
 #                    (default: v0.5.8)
 #   KMS_URL      – baked into the entrypoint; affects measurements
 #                  (default: https://kms.example.com:12001)
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-DSTACK_VERSION="${DSTACK_VERSION:-v0.5.8}"
+DSTACK_COMMIT="${DSTACK_COMMIT:-14963a2ccb0ec7bef8a496c1ac5ac40f5593145d}"
 KMS_URL="${KMS_URL:-https://kms.example.com:12001}"
 APP_ID="${APP_ID:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/output}"
@@ -33,10 +33,10 @@ if [[ -n "${DSTACK_UTIL:-}" && -f "${DSTACK_UTIL}" ]]; then
   echo "[build] Using provided dstack-util: ${DSTACK_UTIL}"
   cp "${DSTACK_UTIL}" "${ROOT_DIR}/app/dstack-util"
 else
-  echo "[build] Building dstack-util from dstack ${DSTACK_VERSION} ..."
+  echo "[build] Building dstack-util from dstack-cloud ${DSTACK_COMMIT} ..."
   DSTACK_SRC="$(mktemp -d)"
-  git clone --depth 1 --branch "${DSTACK_VERSION}" \
-    https://github.com/Dstack-TEE/dstack.git "${DSTACK_SRC}" 2>&1 | tail -1
+  git clone https://github.com/Phala-Network/dstack-cloud.git "${DSTACK_SRC}" 2>&1 | tail -1
+  (cd "${DSTACK_SRC}" && git checkout "${DSTACK_COMMIT}")
   (
     cd "${DSTACK_SRC}"
     cargo build --release -p dstack-util --target x86_64-unknown-linux-musl 2>&1 | tail -5
@@ -92,7 +92,7 @@ jq -n \
   --arg code_hash "${CODE_HASH}" \
   --arg kms_url "${KMS_URL}" \
   --arg app_id "${APP_ID}" \
-  --arg dstack_version "${DSTACK_VERSION}" \
+  --arg dstack_commit "${DSTACK_COMMIT}" \
   --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{
     PCR0: $pcr0,
@@ -101,7 +101,7 @@ jq -n \
     code_hash: $code_hash,
     kms_url: $kms_url,
     app_id: $app_id,
-    dstack_version: $dstack_version,
+    dstack_commit: $dstack_commit,
     built_at: $built_at
   }' > "${OUTPUT_DIR}/measurements.json"
 

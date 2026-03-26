@@ -14,10 +14,10 @@ on:
         description: 'App ID baked into the image (affects measurements)'
         required: false
         default: ''
-      dstack_version:
-        description: 'dstack version tag to build dstack-util from'
+      dstack_commit:
+        description: 'dstack-cloud commit to build dstack-util from'
         required: false
-        default: 'v0.5.8'
+        default: '14963a2ccb0ec7bef8a496c1ac5ac40f5593145d'
 
 permissions:
   contents: write        # create releases
@@ -25,7 +25,7 @@ permissions:
   attestations: write    # GitHub attestations
 
 env:
-  DSTACK_VERSION: ${{ inputs.dstack_version || 'v0.5.8' }}
+  DSTACK_COMMIT: ${{ inputs.dstack_commit || '14963a2ccb0ec7bef8a496c1ac5ac40f5593145d' }}
   KMS_URL: ${{ inputs.kms_url || 'https://kms.example.com:12001' }}
   APP_ID: ${{ inputs.app_id || '' }}
 
@@ -58,9 +58,9 @@ jobs:
       # ── Build dstack-util from source ─────────────────────────────
       - name: Build dstack-util (musl static binary)
         run: |
-          git clone --depth 1 --branch "$DSTACK_VERSION" \
-            https://github.com/Dstack-TEE/dstack.git /tmp/dstack-src
+          git clone https://github.com/Phala-Network/dstack-cloud.git /tmp/dstack-src
           cd /tmp/dstack-src
+          git checkout "$DSTACK_COMMIT"
           cargo build --release -p dstack-util --target x86_64-unknown-linux-musl
           cp target/x86_64-unknown-linux-musl/release/dstack-util "$GITHUB_WORKSPACE/app/dstack-util"
           chmod +x "$GITHUB_WORKSPACE/app/dstack-util"
@@ -119,14 +119,14 @@ jobs:
             --arg code_hash "${CODE_HASH}" \
             --arg kms_url "${KMS_URL}" \
             --arg app_id "${APP_ID}" \
-            --arg dstack_version "${DSTACK_VERSION}" \
+            --arg dstack_commit "${DSTACK_COMMIT}" \
             --arg git_sha "${GITHUB_SHA}" \
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               PCR0: $pcr0, PCR1: $pcr1, PCR2: $pcr2,
               code_hash: $code_hash,
               kms_url: $kms_url, app_id: $app_id,
-              dstack_version: $dstack_version,
+              dstack_commit: $dstack_commit,
               git_sha: $git_sha, built_at: $built_at
             }' > output/measurements.json
 
@@ -199,7 +199,7 @@ jobs:
             | PCR2 | `${{ steps.measurements.outputs.pcr2 }}` |
             | KMS URL | `${{ env.KMS_URL }}` |
             | App ID | `${{ env.APP_ID }}` |
-            | dstack | `${{ env.DSTACK_VERSION }}` |
+            | dstack-cloud | `${{ env.DSTACK_COMMIT }}` |
             | Git SHA | `${{ github.sha }}` |
 
             ### On-chain registration

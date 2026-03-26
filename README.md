@@ -74,7 +74,7 @@ APP_ID=0x... \
 # Option B: build dstack-util from source (needs Rust + musl target)
 KMS_URL=https://your-kms:12001 \
 APP_ID=0x... \
-DSTACK_VERSION=v0.5.8 \
+DSTACK_COMMIT=14963a2ccb0ec7bef8a496c1ac5ac40f5593145d \
   ./scripts/build-eif.sh
 ```
 
