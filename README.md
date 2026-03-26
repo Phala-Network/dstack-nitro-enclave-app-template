@@ -66,12 +66,29 @@ Or use **Actions → Run workflow** for a manual build with custom KMS_URL / APP
 
 ### 4. Register the OS_IMAGE_HASH on-chain
 
-After the release is created, copy the `OS_IMAGE_HASH` from the release page and register it:
+After the release is created, copy the `OS_IMAGE_HASH` from the release page.
+
+#### Development / test environments
+
+For local development or isolated test environments, you can register the image directly using the Hardhat task:
 
 ```bash
 cd dstack/kms/auth-eth
 npx hardhat kms:add-image <OS_IMAGE_HASH> --network <your-network>
 ```
+
+This is convenient for iterating quickly, but it bypasses any governance controls.
+
+#### Production environments (with multisig + timelock governance)
+
+In production, image registration should **not** be performed directly from an externally owned account (EOA). Instead:
+
+1. Use the `OS_IMAGE_HASH` (and other measurement metadata from the release) as input to a governance proposal.
+2. Create a transaction that calls the appropriate registration function on the KMS governance contract (for example, `kms:add-image`), targeting your governance multisig (for example, a Safe wallet).
+3. Let the transaction pass through your configured timelock (cooldown period).
+4. Execute the transaction once the timelock delay has elapsed and required approvals have been collected.
+
+This ensures that new enclave images are only authorized after the agreed governance process (multisig + timelock) has been followed.
 
 ## Local build
 
