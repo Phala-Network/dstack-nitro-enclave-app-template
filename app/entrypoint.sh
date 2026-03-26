@@ -24,7 +24,7 @@ sleep 1
 KMS_URL="__KMS_URL__"
 APP_ID="__APP_ID__"
 
-ARGS="--kms-url ${KMS_URL}"
+ARGS="--kms-url ${KMS_URL} --root-ca /app/root_ca.pem"
 if [ -n "${APP_ID}" ] && [ "${APP_ID}" != "__APP_ID__" ]; then
   ARGS="${ARGS} --app-id ${APP_ID}"
 fi

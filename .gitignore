@@ -2,3 +2,4 @@ output/
 app/dstack-util
 *.eif
 *.pem
+!app/root_ca.pem
