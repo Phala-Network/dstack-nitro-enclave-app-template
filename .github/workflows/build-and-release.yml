@@ -160,17 +160,6 @@ jobs:
             --bundle output/measurements.sigstore.json \
             output/pcr_payload.bin
 
-      # ── GitHub Artifact Attestation ───────────────────────────────
-      - name: Attest EIF artifact
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: output/enclave.eif
-
-      - name: Attest measurements artifact
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: output/measurements.json
-
       # ── Upload artifacts (for non-tag runs) ───────────────────────
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
