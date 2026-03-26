@@ -22,7 +22,6 @@ on:
 permissions:
   contents: write        # create releases
   id-token: write        # sigstore OIDC token
-  attestations: write    # GitHub attestations
 
 env:
   DSTACK_COMMIT: ${{ inputs.dstack_commit || '14963a2ccb0ec7bef8a496c1ac5ac40f5593145d' }}
