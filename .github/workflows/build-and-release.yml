@@ -99,25 +99,26 @@ jobs:
           PCR1=$(jq -r '.Measurements.PCR1' output/nitro-build.json)
           PCR2=$(jq -r '.Measurements.PCR2' output/nitro-build.json)
 
-          CODE_HASH=$(python3 -c "
+          OS_IMAGE_HASH=$(python3 -c "
           import hashlib
           pcrs = bytes.fromhex('${PCR0}') + bytes.fromhex('${PCR1}') + bytes.fromhex('${PCR2}')
           print('0x' + hashlib.sha256(pcrs).hexdigest())
           ")
+          OS_IMAGE_HASH_BARE="${OS_IMAGE_HASH#0x}"
 
           # Persist for later steps
           echo "pcr0=${PCR0}" >> "$GITHUB_OUTPUT"
           echo "pcr1=${PCR1}" >> "$GITHUB_OUTPUT"
           echo "pcr2=${PCR2}" >> "$GITHUB_OUTPUT"
-          echo "code_hash=${CODE_HASH}" >> "$GITHUB_OUTPUT"
-          echo "code_hash_bare=${CODE_HASH#0x}" >> "$GITHUB_OUTPUT"
+          echo "os_image_hash=${OS_IMAGE_HASH}" >> "$GITHUB_OUTPUT"
+          echo "os_image_hash_bare=${OS_IMAGE_HASH_BARE}" >> "$GITHUB_OUTPUT"
 
           # Write measurements.json artifact
           jq -n \
             --arg pcr0 "${PCR0}" \
             --arg pcr1 "${PCR1}" \
             --arg pcr2 "${PCR2}" \
-            --arg code_hash "${CODE_HASH}" \
+            --arg os_image_hash "${OS_IMAGE_HASH}" \
             --arg kms_url "${KMS_URL}" \
             --arg app_id "${APP_ID}" \
             --arg dstack_commit "${DSTACK_COMMIT}" \
@@ -125,28 +126,25 @@ jobs:
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               PCR0: $pcr0, PCR1: $pcr1, PCR2: $pcr2,
-              code_hash: $code_hash,
+              os_image_hash: $os_image_hash,
               kms_url: $kms_url, app_id: $app_id,
               dstack_commit: $dstack_commit,
               git_sha: $git_sha, built_at: $built_at
             }' > output/measurements.json
 
-          echo "::notice::CODE_HASH (OS_IMAGE_HASH) = ${CODE_HASH}"
+          echo "::notice::OS_IMAGE_HASH = ${OS_IMAGE_HASH}"
 
-      # ── Sigstore: attest the code hash ────────────────────────────
-      # This creates a Rekor transparency log entry binding the
-      # code_hash to this GitHub Actions workflow identity (OIDC).
-      # Anyone can verify: cosign verify-attestation ...
+      # ── Sigstore: attest the OS_IMAGE_HASH ─────────────────────────
+      # os_image_hash = sha256(PCR0 || PCR1 || PCR2)
+      # By using the raw PCR concatenation as the attest-blob subject,
+      # Rekor indexes the DSSE entry by its sha256 subject digest —
+      # which IS the os_image_hash.  Searchable at:
+      #   https://search.sigstore.dev/?hash=<os_image_hash>
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Attest code_hash with measurements (Sigstore)
+      - name: Attest OS_IMAGE_HASH with measurements (Sigstore)
         run: |
-          # code_hash = sha256(PCR0 || PCR1 || PCR2)
-          # By using the raw PCR concatenation as the attest-blob subject,
-          # Rekor indexes the DSSE entry by its sha256 subject digest —
-          # which IS the code_hash.  Searchable at:
-          #   https://search.sigstore.dev/?hash=<code_hash>
           python3 -c "
           import sys
           pcr0 = bytes.fromhex('${{ steps.measurements.outputs.pcr0 }}')
@@ -159,7 +157,7 @@ jobs:
             --yes \
             --predicate output/measurements.json \
             --type https://dstack.dev/nitro-enclave/measurements/v1 \
-            --bundle output/code_hash.sigstore.json \
+            --bundle output/os_image_hash.sigstore.json \
             output/pcr_payload.bin
 
       # ── GitHub Artifact Attestation ───────────────────────────────
@@ -181,7 +179,7 @@ jobs:
           path: |
             output/enclave.eif
             output/measurements.json
-            output/code_hash.sigstore.json
+            output/os_image_hash.sigstore.json
 
       # ── Create GitHub Release (tag pushes only) ───────────────────
       - name: Create release
@@ -194,33 +192,31 @@ jobs:
 
             | Field | Value |
             |-------|-------|
-            | **CODE_HASH** | `${{ steps.measurements.outputs.code_hash }}` |
+            | **OS_IMAGE_HASH** | `${{ steps.measurements.outputs.os_image_hash }}` |
             | PCR0 | `${{ steps.measurements.outputs.pcr0 }}` |
             | PCR1 | `${{ steps.measurements.outputs.pcr1 }}` |
             | PCR2 | `${{ steps.measurements.outputs.pcr2 }}` |
             | KMS URL | `${{ env.KMS_URL }}` |
-            | App ID | `${{ env.APP_ID }}` |
             | dstack-cloud | `${{ env.DSTACK_COMMIT }}` |
             | Git SHA | `${{ github.sha }}` |
 
             ### On-chain registration
 
-            Use `CODE_HASH` as the `os_image_hash` when calling
-            `kms:add-image` to whitelist this enclave image:
+            Use `OS_IMAGE_HASH` when calling `kms:add-image` to whitelist this enclave image:
 
             ```bash
-            npx hardhat kms:add-image ${{ steps.measurements.outputs.code_hash }} \
+            npx hardhat kms:add-image ${{ steps.measurements.outputs.os_image_hash }} \
               --network <your-network>
             ```
 
             ### Sigstore verification
 
-            **Search by CODE_HASH on Rekor**: [search.sigstore.dev](https://search.sigstore.dev/?hash=${{ steps.measurements.outputs.code_hash_bare }})
+            **Search on Rekor**: [search.sigstore.dev](https://search.sigstore.dev/?hash=${{ steps.measurements.outputs.os_image_hash_bare }})
 
-            Verify the measurements attestation (needs `pcr_payload.bin` reconstructed from PCR values):
+            Verify the measurements attestation:
 
             ```bash
-            # Reconstruct the PCR payload (the blob whose sha256 = CODE_HASH)
+            # Reconstruct the PCR payload (the blob whose sha256 = OS_IMAGE_HASH)
             python3 -c "
             import sys
             pcr0 = bytes.fromhex('${{ steps.measurements.outputs.pcr0 }}')
@@ -230,7 +226,7 @@ jobs:
             " > pcr_payload.bin
 
             cosign verify-blob-attestation \
-              --bundle code_hash.sigstore.json \
+              --bundle os_image_hash.sigstore.json \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               --certificate-identity-regexp "github.com/${{ github.repository }}" \
               --type https://dstack.dev/nitro-enclave/measurements/v1 \
@@ -239,4 +235,4 @@ jobs:
           files: |
             output/enclave.eif
             output/measurements.json
-            output/code_hash.sigstore.json
+            output/os_image_hash.sigstore.json
