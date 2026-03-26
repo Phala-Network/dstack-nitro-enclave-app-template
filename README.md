@@ -6,7 +6,7 @@ Template repository for building [dstack](https://github.com/Dstack-TEE/dstack) 
 
 1. Builds a minimal Alpine-based Docker image containing **dstack-util** and your enclave entrypoint
 2. Converts the Docker image to an AWS Nitro **EIF** (Enclave Image File) using `nitro-cli build-enclave`
-3. Extracts **PCR measurements** (PCR0, PCR1, PCR2) and computes **CODE_HASH** (`sha256(PCR0 || PCR1 || PCR2)`) — this is the `os_image_hash` value you register on-chain in the DstackKms contract
+3. Extracts **PCR measurements** (PCR0, PCR1, PCR2) and computes **OS_IMAGE_HASH** (`sha256(PCR0 || PCR1 || PCR2)`) — this is the value you register on-chain in the DstackKms contract
 4. Attests the measurements via **Sigstore** (Rekor transparency log) so anyone can verify the build provenance
 5. Publishes the EIF, measurements, and Sigstore bundle as a **GitHub Release**
 
@@ -16,6 +16,7 @@ Template repository for building [dstack](https://github.com/Dstack-TEE/dstack) 
 app/
   Dockerfile          # Enclave image definition (Alpine + dstack-util)
   entrypoint.sh       # Enclave startup script (template with __KMS_URL__ / __APP_ID__)
+  root_ca.pem         # ⚠️ KMS root CA certificate — MUST replace before building
 scripts/
   build-eif.sh        # Local build script (for development / manual builds)
 .github/workflows/
@@ -32,11 +33,23 @@ Click **"Use this template"** on GitHub, or:
 gh repo create my-enclave-app --template <this-repo> --private
 ```
 
-### 2. Customize your enclave app
+### 2. Replace the KMS root CA certificate
+
+> **⚠️ This step is required.** The enclave pins the KMS TLS connection using `app/root_ca.pem`. The placeholder file shipped with this template is **not a valid certificate** — you must replace it with your KMS instance's root CA before building.
+
+Obtain the root CA from your running KMS:
+
+```bash
+curl -sk https://<kms-host>:12001/prpc/KmsService.GetTempCaCert | jq -r .caCert > app/root_ca.pem
+```
+
+The root CA is baked into the enclave image and **affects the OS_IMAGE_HASH**. If the KMS root CA changes (e.g. KMS is re-bootstrapped), you must update this file and rebuild.
+
+### 3. Customize your enclave app
 
 Edit `app/entrypoint.sh` to implement your enclave logic. The template ships with a `dstack-util get-keys` example that fetches application keys from a dstack KMS.
 
-The `__KMS_URL__` and `__APP_ID__` placeholders are replaced at build time. **Changing these values changes the PCR measurements**, so the same values must be used for both measurement preview and production builds.
+The `__KMS_URL__`, `__APP_ID__`, and `app/root_ca.pem` are all baked into the Docker image. **Changing any of them changes the PCR measurements**, so the same values must be used for both measurement preview and production builds.
 
 ### 3. Create a release
 
@@ -51,13 +64,13 @@ git push origin v0.1.0
 
 Or use **Actions → Run workflow** for a manual build with custom KMS_URL / APP_ID.
 
-### 4. Register the code hash on-chain
+### 4. Register the OS_IMAGE_HASH on-chain
 
-After the release is created, copy the `CODE_HASH` from the release page and register it:
+After the release is created, copy the `OS_IMAGE_HASH` from the release page and register it:
 
 ```bash
 cd dstack/kms/auth-eth
-npx hardhat kms:add-image <CODE_HASH> --network <your-network>
+npx hardhat kms:add-image <OS_IMAGE_HASH> --network <your-network>
 ```
 
 ## Local build
@@ -84,19 +97,34 @@ Outputs land in `./output/`:
 
 ## Verifying Sigstore attestation
 
-Release builds are attested via Sigstore. Verify the measurements:
+Release builds are attested via Sigstore. The OS_IMAGE_HASH is directly searchable on Rekor:
+
+```
+https://search.sigstore.dev/?hash=<os_image_hash without 0x prefix>
+```
+
+To verify locally:
 
 ```bash
 # Download release assets
-gh release download v0.1.0 -p '*.eif' -p '*.json'
+gh release download v0.1.0 -p 'measurements.json' -p 'os_image_hash.sigstore.json'
+
+# Reconstruct the PCR payload (the blob whose sha256 = OS_IMAGE_HASH)
+python3 -c "
+import sys, json
+m = json.load(open('measurements.json'))
+sys.stdout.buffer.write(
+    bytes.fromhex(m['PCR0']) + bytes.fromhex(m['PCR1']) + bytes.fromhex(m['PCR2'])
+)
+" > pcr_payload.bin
 
 # Verify
 cosign verify-blob-attestation \
-  --bundle measurements.sigstore.json \
+  --bundle os_image_hash.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp "github.com/<owner>/<repo>" \
   --type https://dstack.dev/nitro-enclave/measurements/v1 \
-  enclave.eif
+  pcr_payload.bin
 ```
 
 ## How measurements work
@@ -109,15 +137,19 @@ AWS Nitro Enclaves produce three **Platform Configuration Registers** (PCRs) whe
 | PCR1 | Linux kernel and boot ramdisk |
 | PCR2 | Application layer (your Docker image filesystem) |
 
-The **CODE_HASH** (also called `os_image_hash`) is computed as:
+The **OS_IMAGE_HASH** is computed as:
 
 ```
-CODE_HASH = sha256(PCR0 || PCR1 || PCR2)
+OS_IMAGE_HASH = sha256(PCR0 || PCR1 || PCR2)
 ```
 
-This is the value registered in the DstackKms smart contract's image whitelist. When the enclave requests keys from KMS, the KMS verifies that the enclave's attestation quote contains PCR values that hash to a whitelisted CODE_HASH.
+This is the value registered in the DstackKms smart contract's image whitelist. When the enclave requests keys from KMS, the KMS verifies that the enclave's attestation quote contains PCR values that hash to a whitelisted OS_IMAGE_HASH.
 
-**Important:** `KMS_URL` and `APP_ID` are baked into the entrypoint script as part of the Docker image. Changing them changes the image filesystem, which changes PCR2, which changes CODE_HASH. Always use identical values for preview (`--show-mrs`) and production builds.
+**Important:** The following are all baked into the Docker image and affect the OS_IMAGE_HASH:
+- `KMS_URL` and `APP_ID` (substituted into `entrypoint.sh`)
+- `app/root_ca.pem` (KMS root CA certificate)
+
+Changing any of them changes PCR2, which changes OS_IMAGE_HASH. Always use identical values for preview (`--show-mrs`) and production builds.
 
 ## License
 
