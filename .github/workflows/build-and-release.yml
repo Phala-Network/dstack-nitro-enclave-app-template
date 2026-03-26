@@ -110,6 +110,7 @@ jobs:
           echo "pcr1=${PCR1}" >> "$GITHUB_OUTPUT"
           echo "pcr2=${PCR2}" >> "$GITHUB_OUTPUT"
           echo "code_hash=${CODE_HASH}" >> "$GITHUB_OUTPUT"
+          echo "code_hash_bare=${CODE_HASH#0x}" >> "$GITHUB_OUTPUT"
 
           # Write measurements.json artifact
           jq -n \
@@ -214,7 +215,7 @@ jobs:
 
             ### Sigstore verification
 
-            **Search by CODE_HASH on Rekor**: [search.sigstore.dev](https://search.sigstore.dev/?hash=${{ steps.measurements.outputs.code_hash }})
+            **Search by CODE_HASH on Rekor**: [search.sigstore.dev](https://search.sigstore.dev/?hash=${{ steps.measurements.outputs.code_hash_bare }})
 
             Verify the measurements attestation (needs `pcr_payload.bin` reconstructed from PCR values):
 
